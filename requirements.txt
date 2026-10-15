@@ -1,0 +1,9 @@
+streamlit>=1.32
+torch>=2.0
+torchvision>=0.15
+Pillow>=10.0
+numpy>=1.24
+grad-cam>=1.5.0
+openai>=1.50
+python-dotenv>=1.0
+google-genai>=0.3
