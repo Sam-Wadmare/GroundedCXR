@@ -48,7 +48,8 @@ from sklearn.metrics import (
 )
 
 from src.data_loader import get_dataloaders
-from src.model import CLASS_NAMES, load_trained_model
+from src.model import CLASS_NAMES
+from src.train import build_model
 
 
 def set_seed(seed):
@@ -226,10 +227,56 @@ def uncertain_band_table(y_true, y_prob, lower, upper):
     }
 
 
+def load_checkpoint_for_model(model_name, checkpoint_path, device):
+    """
+    Builds the architecture named by `model_name` ("resnet18" or
+    "simple_cnn", via src.train.build_model) and loads `checkpoint_path`'s
+    weights into it.
+
+    This generalizes src.model.load_trained_model() (which always builds
+    a ResNet18, regardless of what checkpoint you give it) so evaluate.py
+    can check checkpoints produced by EITHER model src/train.py can train
+    — trying to load a SimpleCNN checkpoint into a ResNet18 architecture
+    (or vice versa) fails loudly with a key mismatch, since the two
+    architectures don't share parameter names.
+    """
+    if not os.path.isfile(checkpoint_path):
+        raise FileNotFoundError(
+            f"Checkpoint not found at '{checkpoint_path}'. Check --checkpoint "
+            "and make sure --model matches the architecture it was trained with."
+        )
+
+    model = build_model(model_name)
+
+    checkpoint = torch.load(checkpoint_path, map_location=device)
+
+    # Support both a raw state_dict and a dict-wrapped checkpoint, same as
+    # src.model.load_trained_model does for ResNet18 checkpoints.
+    if isinstance(checkpoint, dict) and "state_dict" in checkpoint:
+        state_dict = checkpoint["state_dict"]
+    elif isinstance(checkpoint, dict) and "model_state_dict" in checkpoint:
+        state_dict = checkpoint["model_state_dict"]
+    else:
+        state_dict = checkpoint
+
+    # Strip a possible "module." prefix left over from DataParallel training.
+    cleaned_state_dict = {}
+    for k, v in state_dict.items():
+        new_key = k[len("module."):] if k.startswith("module.") else k
+        cleaned_state_dict[new_key] = v
+
+    model.load_state_dict(cleaned_state_dict)
+    model.to(device)
+    model.eval()
+    return model
+
+
 def main():
     parser = argparse.ArgumentParser(
         description="TASK 2: Evaluate GroundedCXR ResNet18 (metrics + validation-tuned threshold)."
     )
+    parser.add_argument("--model", choices=["resnet18", "simple_cnn"], default="resnet18",
+                         help="Which architecture --checkpoint was trained with (default: resnet18)")
     parser.add_argument("--dataset_dir", default="dataset/chest_xray")
     parser.add_argument("--split_csv", default="dataset/split.csv")
     parser.add_argument("--checkpoint", default="models/best_pneumonia_resnet18.pth")
@@ -261,8 +308,8 @@ def main():
     )
     print(f"Validation images: {len(val_loader.dataset)}, Test images: {len(test_loader.dataset)}")
 
-    print(f"Loading model from {args.checkpoint} ...")
-    model = load_trained_model(args.checkpoint, device)
+    print(f"Loading {args.model} model from {args.checkpoint} ...")
+    model = load_checkpoint_for_model(args.model, args.checkpoint, device)
 
     print("Running inference on VALIDATION set...")
     y_true_val, y_prob_val = get_probs_and_labels(model, val_loader, device)
